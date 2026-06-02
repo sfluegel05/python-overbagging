@@ -1,11 +1,11 @@
 import abc
-from overbagging.oversampling import oversample
+
 from overbagging.bagging import bootstrap_data
+from overbagging.oversampling import oversample
 from overbagging.remedial import remedial_resample
 
-class BaseDataset(abc.ABC):
 
-    
+class BaseDataset(abc.ABC):
     # ------------------------------------------------------------------ #
     # Generic pipeline machinery.
     # ------------------------------------------------------------------ #
@@ -27,35 +27,44 @@ class BaseDataset(abc.ABC):
     def _split(self, data):
         """Partition instances into train (resampled) and pass-through (val/test)."""
         raise NotImplementedError
-    
+
     def _build_label_df(self, train_data):
         """Build the train label DataFrame: one row per instance (indexed by
         ``ident``), one column per label."""
         raise NotImplementedError
-    
+
     def _reassemble(self, resampled_labels, train_data, passthrough_data):
         """Reassemble the resampled train labels with the original train data and
         passthrough val/test data, yielding a new dataset to save."""
         raise NotImplementedError
-    
+
     def _save(self, data, target_path):
         """Save the resampled dataset to disk."""
         raise NotImplementedError
-    
+
         # ------------------------------------------------------------------ #
+
     # Pipeline steps -- the only step-specific code.
     # ------------------------------------------------------------------ #
-    def apply_remedial(self, target_path):
+    def apply_remedial(self, target_path, split_fraction: float | None = None):
         """Apply REMEDIAL resampling to the train split and save to ``target_path``.
 
         Train samples that REMEDIAL splits are masked: the masked labels become
         ``NaN`` in the resulting ``float32`` label vector. Split copies keep
         their parent instance's ``ident`` (they remain train samples, so the
         original split assignment still applies).
-        """
-        return self._run(remedial_resample, target_path)
 
-    def apply_bagging(self, target_path, random_state: int=42):
+        ``split_fraction`` (in ``[0, 1]``) selects that fraction of the train
+        samples -- the highest-SCUMBLE ones -- as split candidates; when
+        ``None`` (the default), candidates are every sample above the mean
+        SCUMBLE score. See :func:`~overbagging.remedial.remedial_resample`.
+        """
+        return self._run(
+            lambda label_df: remedial_resample(label_df, split_fraction),
+            target_path,
+        )
+
+    def apply_bagging(self, target_path, random_state: int = 42):
         """Build a bagging (bootstrap) resample of the train split and save it.
 
         Draws train instances with replacement (as many

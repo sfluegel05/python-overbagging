@@ -14,6 +14,7 @@ def scumble(label_imbalance_ratios):
     scumble_score = 1 - geometric_mean_ir / arithmetic_mean_ir
     return scumble_score
 
+
 def get_irlbl(data: pd.DataFrame) -> tuple[int, pd.Series]:
     labels = data.columns
     label_frequencies = data[labels].sum()
@@ -22,11 +23,13 @@ def get_irlbl(data: pd.DataFrame) -> tuple[int, pd.Series]:
     return max_freq, irlbl
 
 
-def remedial_resample(data: pd.DataFrame) -> pd.DataFrame:
+def remedial_resample(
+    data: pd.DataFrame, split_fraction: float | None = None
+) -> pd.DataFrame:
     """
     Resample a dataset with REMEDIAL.
 
-    Each high-SCUMBLE sample whose positive labels span both the majority and
+    Each selected sample whose positive labels span both the majority and
     minority label groups is split into two copies: a majority copy (minority
     labels masked with ``NaN``) and a minority copy (majority labels masked
     with ``NaN``). All other samples are kept unchanged.
@@ -37,12 +40,23 @@ def remedial_resample(data: pd.DataFrame) -> pd.DataFrame:
             function with train data, and only with label columns that are
             positive for at least one instance (all-zero columns yield an
             infinite imbalance ratio).
+        split_fraction (float | None): Fraction of samples (in ``[0, 1]``) to
+            consider for splitting, taken as the highest-SCUMBLE samples. When
+            ``None`` (the default), samples are selected the original way:
+            every sample whose SCUMBLE score exceeds the mean SCUMBLE score.
+            In both cases a selected sample is only actually split if its
+            positive labels span both the majority and minority label groups,
+            so the realised number of splits may be smaller.
 
     Returns:
         pd.DataFrame: The resampled dataset. The index keeps the original
             instance IDs; a split sample appears twice under the same ID (once
             per copy), so callers must assign new unique IDs.
     """
+    if split_fraction is not None and not (0.0 <= split_fraction <= 1.0):
+        raise ValueError(
+            f"split_fraction must be in [0, 1] or None, got {split_fraction}"
+        )
     print("Resampling with REMEDIAL...")
 
     active_cols = data.columns[data.any(axis=0)]
@@ -68,11 +82,25 @@ def remedial_resample(data: pd.DataFrame) -> pd.DataFrame:
     # Rows with no positive labels get a NaN scumble score; they cannot be
     # split, so keep them unchanged rather than dropping them.
     nan_scumble_idx = data.index[scumble_scores.isna()]
-    print(f"Number of rows with NaN scumble score (kept unchanged): {len(nan_scumble_idx)}")
+    print(
+        f"Number of rows with NaN scumble score (kept unchanged): {len(nan_scumble_idx)}"
+    )
 
-    # Split only high-scumble rows whose positive labels span both label
-    # groups. Rows with labels from just one side stay unchanged.
-    candidate_rows = data[scumble_scores > scumble_mean]
+    # Select the candidate rows to split. Rows with NaN scumble (no positive
+    # labels) can never be candidates. With ``split_fraction`` set, take that
+    # fraction of all samples as the highest-scumble ones; otherwise fall back
+    # to the original rule of every row above the mean scumble score. In either
+    # case, rows whose labels span just one group stay unchanged below.
+    if split_fraction is None:
+        candidate_rows = data[scumble_scores > scumble_mean]
+    else:
+        n_candidates = round(split_fraction * len(data))
+        ranked = scumble_scores.dropna().sort_values(ascending=False)
+        candidate_rows = data.loc[ranked.index[:n_candidates]]
+        print(
+            f"Selecting {len(candidate_rows)} highest-scumble candidate rows "
+            f"({split_fraction:.2%} of {len(data)})"
+        )
 
     split_indices = []
     majority_rows = []
@@ -126,7 +154,7 @@ def remedial_resample(data: pd.DataFrame) -> pd.DataFrame:
         len(resampled_data),
     )
     # re-add all-0 columns as all-0, and cast to float32 (NaN masks must be preserved)
-    resampled_data = resampled_data.astype(np.float32).reindex(columns=all_cols, fill_value=0.0)
+    resampled_data = resampled_data.astype(np.float32).reindex(
+        columns=all_cols, fill_value=0.0
+    )
     return resampled_data
-
-
