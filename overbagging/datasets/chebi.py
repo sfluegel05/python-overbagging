@@ -93,7 +93,7 @@ class ChebiDataset(BaseDataset):
                 }
             )
         return new_data
-    
+
     def _save(self, data, target_path):
         import torch
 

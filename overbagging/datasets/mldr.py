@@ -90,4 +90,3 @@ class MldrDataset(BaseDataset):
     def _save(self, data, target_path):
         """Write the resampled label table (``id``, labels)."""
         data.to_csv(target_path, index=True)
-

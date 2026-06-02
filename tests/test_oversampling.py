@@ -43,7 +43,7 @@ def test_oversample_only_duplicates_minority_samples():
     random.seed(0)
     result = oversample(data, sampling_rate=0.5)
 
-    added = result.iloc[len(data):]
+    added = result.iloc[len(data) :]
     # Every duplicated row must carry at least one minority label.
     assert (added[["min1", "min2"]].any(axis=1)).all()
 
@@ -55,7 +55,7 @@ def test_oversample_preserves_parent_ident_index():
 
     # Duplicated rows keep their parent index label rather than being reindexed.
     assert set(result.index).issubset(set(data.index))
-    added = result.iloc[len(data):]
+    added = result.iloc[len(data) :]
     assert set(added.index).issubset({"s4", "s5"})
 
 

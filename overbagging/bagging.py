@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def bootstrap_data(
     data: pd.DataFrame,
     seed: int = 42,
@@ -14,7 +15,5 @@ def bootstrap_data(
         pd.DataFrame: The bootstrapped dataset.
     """
     print("Bootstrapping data...")
-    bootstrapped_data = data.sample(
-        n=len(data), replace=True, random_state=seed
-    )
+    bootstrapped_data = data.sample(n=len(data), replace=True, random_state=seed)
     return bootstrapped_data

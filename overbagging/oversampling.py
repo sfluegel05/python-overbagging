@@ -5,6 +5,7 @@ import pandas as pd
 
 from overbagging.remedial import get_irlbl
 
+
 def oversample(
     data: pd.DataFrame,
     sampling_rate: float = 0.1,
@@ -63,6 +64,11 @@ def oversample(
                 f"Round {round_idx} finished, {samples_to_add:.2f} samples to go, {len(minority_bags)} minority bags left"
             )
         round_idx += 1
+
+    if len(new_samples) == 0:
+        raise ValueError(
+            "No samples were added; check if there are no minority labels."
+        )
 
     # ``new_samples`` holds index labels (instance ids), so select with ``loc``;
     # keep the index intact so callers can map duplicates back to their parent.
