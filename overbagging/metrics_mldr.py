@@ -19,6 +19,7 @@ Metrics:
 Per-label: IRLbl(j) and its SCUMBLE contribution SCUMBLE_lbl(j).
 """
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -68,17 +69,20 @@ def _per_sample_scumble(labels: pd.DataFrame, irlbl: pd.Series) -> np.ndarray:
     return scores
 
 
-def compute_all_metrics(labels: pd.DataFrame, n_features: int | None = None) -> dict:
+def compute_all_metrics(labels: pd.DataFrame, n_features: int | None = None,
+                        warn_on_nan: bool = True) -> dict:
     """Compute every REMEDIAL-HwR metric for a label matrix.
 
     Args:
         labels: instances x labels 0/1 matrix (``NaN`` masks tolerated).
         n_features: feature count for the ``d`` metric; ``None`` if unknown.
+        warn_on_nan: print a warning when NaN (masked) labels are present;
+            set ``False`` for quiet batch processing.
     """
     n, q = labels.shape
     if n == 0 or q == 0:
         raise ValueError("Label matrix has no instances or no labels.")
-    if labels.isna().to_numpy().any():
+    if warn_on_nan and labels.isna().to_numpy().any():
         print(
             "Warning: label matrix contains NaN (masked) entries; they are "
             "treated as inactive for the metrics."
@@ -166,3 +170,118 @@ def print_dataset_metrics(
         for lbl, ir, sc in zip(m["label_names"], m["IRLbl"], m["SCUMBLE_lbl"]):
             print(f"  {str(lbl):<30} {ir:>10.4f} {sc:>12.6f}")
     return m
+
+
+# ── Batch metrics to CSV ──────────────────────────────────────────────────────────
+
+# Scalar (dataset-level) metrics written to the CSV. The feature count ``d`` and
+# the per-label arrays are intentionally excluded -- only label files are read.
+SCALAR_METRIC_KEYS = ("n", "q", "LCard", "LDens", "DL", "DL%", "MeanIR", "SCUMBLE")
+
+# Where the REMEDIAL-HwR dataset folders live (each holds csv/ and fold_*/).
+DEFAULT_DATASETS_DIR = Path(
+    r"C:\Users\sifluegel\obs\PhD\Hiwis & Theses\Jonas Cappellani - BT Bagging & Boosting"
+    r"\REMEDIAL-HwR\datasets"
+)
+CSV_SUBDIR = "csv"
+
+# Collapse individual bagging repetitions (bag0, bag1, ...) into one ``bag`` group
+# so they are averaged together rather than reported separately.
+_BAG_TOKEN = re.compile(r"bag\d+")
+
+
+def _bag_group(config: str) -> str:
+    """Map a config to its group, merging bag0/bag1/... into a single ``bag``."""
+    return _BAG_TOKEN.sub("bag", config)
+
+
+def _scalar_metrics(labels_csv_path) -> dict:
+    """Scalar metrics for one labels CSV, ignoring features (no ``d``)."""
+    labels = load_label_matrix(labels_csv_path)
+    m = compute_all_metrics(labels, n_features=None, warn_on_nan=False)
+    return {k: m[k] for k in SCALAR_METRIC_KEYS}
+
+
+def save_all_dataset_metrics(
+    out_csv_path,
+    datasets_dir=DEFAULT_DATASETS_DIR,
+    round_to: int | None = 6,
+) -> pd.DataFrame:
+    """Compute label-only metrics for every dataset/config and save them to CSV.
+
+    For each dataset folder in ``datasets_dir`` this reads only label files:
+      * the ``baseline`` from ``csv/<name>_labels.csv`` (one file, no folds), and
+      * every ``<config>_labels.csv`` found under the ``fold_*`` subfolders.
+
+    Individual bagging repetitions (``bag0``, ``bag1``, ...) are merged into a
+    single ``bag`` group and **averaged together** (across folds and bags), so no
+    per-bag rows are reported. Every other config is averaged across folds. The
+    result is one row per ``(dataset, config)``; ``n_files`` is how many label
+    files went into the average. Features are never read, so ``d`` is omitted.
+
+    Args:
+        out_csv_path: destination CSV path.
+        datasets_dir: directory holding the dataset folders.
+        round_to: decimals to round metric columns to (``None`` keeps full precision).
+
+    Returns:
+        The saved DataFrame (one row per dataset/config).
+    """
+    datasets_dir = Path(datasets_dir)
+    rows = []
+
+    for dataset_dir in sorted(p for p in datasets_dir.iterdir() if p.is_dir()):
+        name = dataset_dir.name
+
+        # baseline: the original, un-resampled labels (identical across folds).
+        baseline = dataset_dir / CSV_SUBDIR / f"{name}_labels.csv"
+        if baseline.exists():
+            rows.append({"dataset": name, "config": "baseline", "n_files": 1,
+                         **_scalar_metrics(baseline)})
+
+        # Group label files by config, merging bag0/bag1/... into one ``bag`` group.
+        config_files: dict[str, list[Path]] = {}
+        for fold_dir in sorted(dataset_dir.glob("fold_*")):
+            for label_path in sorted(fold_dir.glob("*_labels.csv")):
+                config = _bag_group(label_path.name[: -len("_labels.csv")])
+                config_files.setdefault(config, []).append(label_path)
+
+        for config, paths in sorted(config_files.items()):
+            per_file = [_scalar_metrics(p) for p in paths]
+            averaged = {k: float(np.mean([d[k] for d in per_file]))
+                        for k in SCALAR_METRIC_KEYS}
+            rows.append({"dataset": name, "config": config, "n_files": len(paths),
+                         **averaged})
+
+        print(f"  {name}: {len(config_files) + (1 if baseline.exists() else 0)} configs")
+
+    df = pd.DataFrame(rows, columns=["dataset", "config", "n_files", *SCALAR_METRIC_KEYS])
+    if round_to is not None:
+        df[list(SCALAR_METRIC_KEYS)] = df[list(SCALAR_METRIC_KEYS)].round(round_to)
+
+    out_csv_path = Path(out_csv_path)
+    out_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_csv_path, index=False)
+    print(f"Saved: {out_csv_path}  ({len(df)} dataset/config rows)")
+    return df
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Save fold-averaged, label-only imbalance metrics for every "
+                    "dataset/config to a CSV.")
+    parser.add_argument("--datasets-dir", default=str(DEFAULT_DATASETS_DIR),
+                        help="directory holding the dataset folders")
+    parser.add_argument("--out", default=None,
+                        help="output CSV path (default: <datasets-dir>/../dataset_metrics_summary.csv)")
+    args = parser.parse_args()
+
+    datasets_dir = Path(args.datasets_dir)
+    out = Path(args.out) if args.out else datasets_dir.parent / "dataset_metrics_summary.csv"
+    save_all_dataset_metrics(out, datasets_dir=datasets_dir)
+
+
+if __name__ == "__main__":
+    main()
